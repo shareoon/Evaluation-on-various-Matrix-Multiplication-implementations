@@ -8,13 +8,13 @@ from pathlib import Path
 
 
 
-SOURCE_FILE = "openmp.cpp"          # path to your .cpp file
+SOURCE_FILE = "openmp.cpp"          # path to .cpp file
 BINARY_FILE = "./openmp"        # compiled output
 SIZES = [64, 128, 256, 512, 1024, 2048]   # matrix sizes (N) to test
 THREADS = [1, 2, 4, 8, 10, 12]
 REPEATS = 30                          # runs per size
 OUTPUT_CSV = "openmp_results.csv"
-COMPILE_FLAGS = ["-O3", "-fopenmp"]  # tweak as needed (e.g. add -O3)
+COMPILE_FLAGS = ["-O3", "-fopenmp"]  
 
 TIME_RE = re.compile(r"([\d.]+)\s*ms")
 

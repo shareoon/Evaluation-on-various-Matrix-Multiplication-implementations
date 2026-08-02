@@ -8,13 +8,13 @@ from pathlib import Path
 
 
 
-SOURCE_FILE = "blocked.cpp"          # path to your .cpp file
+SOURCE_FILE = "blocked.cpp"          # path to .cpp file
 BINARY_FILE = "./blocked"        # compiled output
 SIZES = [64, 128, 256, 512, 1024, 2048]   # matrix sizes (N) to test
 BLOCKS = [8, 16, 24, 32, 48, 64, 96, 128]
 REPEATS = 30                          # runs per size
 OUTPUT_CSV = "blocked_results.csv"
-COMPILE_FLAGS = ["-O3", "-fopenmp"]  # tweak as needed (e.g. add -O3)
+COMPILE_FLAGS = ["-O3", "-fopenmp"]  
 
 TIME_RE = re.compile(r"([\d.]+)\s*ms")
 

@@ -36,7 +36,7 @@ def load_csv(path: str):
             # Remove outliers
             filtered = remove_outliers_iqr(samples)
 
-            # If everything gets removed (unlikely), keep original data
+            # If everything gets removed, keep original data
             if len(filtered) == 0:
                 filtered = samples
 

@@ -29,7 +29,7 @@ int main() {
     vector<vector<int>> B(N, vector<int>(N));
     vector<vector<int>> C(N, vector<int>(N));
 
-    // Generate random matrices A and B
+    // Random matrices A and B
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             A[i][j] = rand() % 10;
@@ -37,7 +37,7 @@ int main() {
         }
     }
 
-    //START TIME
+    //Start time
     auto start = high_resolution_clock::now();
 
     // Matrix multiplication
@@ -51,7 +51,7 @@ int main() {
     }
 
     auto stop = high_resolution_clock::now();
-    //END TIME
+    //End time
 
 
     if(N<8){

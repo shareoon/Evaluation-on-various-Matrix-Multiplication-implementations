@@ -36,7 +36,7 @@ def load_csv(path: str):
             # Remove outliers
             filtered = remove_outliers_iqr(samples)
 
-            # If everything gets removed (unlikely), keep original data
+            # If everything gets removed, keeps original data
             if len(filtered) == 0:
                 filtered = samples
 
@@ -68,7 +68,7 @@ def plot_linear(Ns, blocks, means, stds, outpath):
     for N in unique_Ns:
         mask = Ns == N
 
-        # Sort by thread count so the line is drawn correctly
+        # Sort by block size so the line is drawn correctly
         order = np.argsort(blocks[mask])
 
         plt.errorbar(
@@ -110,7 +110,7 @@ def plot_speedup(Ns, blocks, means, outpath):
         b = b[order]
         m = m[order]
 
-        # Runtime at 1 thread
+        # Runtime at 8 block size(baseline)
         baseline = m[b == 8][0]
 
         speedup = baseline / m

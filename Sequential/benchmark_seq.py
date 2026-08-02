@@ -6,15 +6,13 @@ import re
 import argparse
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-SOURCE_FILE = "sequential.cpp"          # path to your .cpp file
+
+SOURCE_FILE = "sequential.cpp"          # path to .cpp file
 BINARY_FILE = "./seqop"        # compiled output
 SIZES = [64, 128, 256, 512, 1024, 2048]   # matrix sizes (N) to test
 REPEATS = 30                          # runs per size
 OUTPUT_CSV = "seq_results.csv"
-COMPILE_FLAGS = ["-O2", "-std=c++17"]  # tweak as needed (e.g. add -O3)
+COMPILE_FLAGS = ["-O2", "-std=c++17"]  
 
 TIME_RE = re.compile(r"([\d.]+)\s*ms")
 

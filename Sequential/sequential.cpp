@@ -23,7 +23,7 @@ int main() {
         }
     }
 
-    //START TIME
+    //Start time
     auto start = high_resolution_clock::now();
 
     // Matrix multiplication
@@ -36,7 +36,7 @@ int main() {
     }
 
     auto stop = high_resolution_clock::now();
-    //END TIME
+    //End time
 
     duration<double, milli> elapsed = stop-start;
     cout << elapsed.count();

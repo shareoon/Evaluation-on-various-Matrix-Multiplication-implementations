@@ -1,0 +1,360 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[american]{babel}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\graphicspath{ {./graphics2/} }
+\usepackage{caption}
+\usepackage[font={footnotesize,it}]{caption}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny,
+  xleftmargin=1.5em,
+  language=C++
+}
+
+\title{Performance Evaluation of Sequential, OpenMP, Cache-Blocked, and Hybrid Dense Matrix Multiplication}
+\author{Author\\ \small{Sharon Shibu}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Dense matrix multiplication is a computational kernel whose $O(N^3)$ cost and memory-access pattern make it a natural target for both thread-level parallelism and cache-aware optimization. This paper presents a systematic, empirical performance evaluation of four C++ implementations of matrix multiplication -- a sequential baseline, an OpenMP-parallelized version, a cache-blocked (tiled) version, and a combined blocked-plus-OpenMP version -- across matrix sizes from $N=64$ to $N=2048$. Each configuration was benchmarked with 30 repeated trials, and a substantial fraction of trials (7--11\%, depending on configuration) exhibited runtime spikes two to three orders of magnitude above the surrounding samples, consistent with transient OS scheduler preemption rather than genuine algorithmic variance. These outliers were removed prior to analysis, and all reported statistics (mean and standard deviation) are computed on the cleaned samples. Under this treatment, OpenMP parallelization alone yields up to a $4.8\times$ speedup at large $N$, cache blocking alone yields a more modest $2.9\times$ speedup, and the combined blocked-OpenMP implementation achieves the largest speedup of $7.0\times$ at $N=2048$, though it underperforms plain OpenMP at smaller sizes due to fixed block-size overhead. We further characterize the sensitivity of the blocked implementation to block size and of the OpenMP implementation to thread count.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Matrix multiplication is one of the most fundamental operations in scientific computing and serves as the computational backbone of numerous applications, including machine learning, computer graphics, signal processing, image processing, scientific simulations, and numerical linear algebra. As the size of matrices increases, the computational cost grows cubically with matrix dimension, making efficient matrix multiplication a critical requirement for modern high-performance computing systems.
+
+Traditional sequential matrix multiplication suffers from long execution times due to its $O(N^3)$ computational complexity and inefficient memory access patterns. Although modern processors offer multiple cores and sophisticated cache hierarchies, naive implementations often fail to fully utilize the available computational resources. Consequently, improving matrix multiplication performance requires exploiting both thread-level parallelism and memory-hierarchy optimization.
+
+OpenMP provides a simple and portable programming model for shared-memory parallelism by distributing independent computations across multiple CPU cores. However, parallel execution alone does not eliminate the performance degradation caused by poor cache locality. Cache blocking (or loop tiling) addresses this issue by partitioning matrices into smaller submatrices that fit within the processor cache, thereby increasing data reuse and reducing cache misses. Combining thread-level parallelism with cache-aware optimization can significantly improve overall execution efficiency.
+
+This work presents a systematic performance evaluation of dense matrix multiplication using progressively optimized CPU implementations. Starting from a sequential baseline, OpenMP parallelization is introduced to exploit multicore execution, followed by cache-blocked matrix multiplication to improve memory locality. Finally, both techniques are combined to evaluate their cumulative impact on runtime and scalability. Performance is analyzed over multiple matrix sizes and thread configurations using runtime and speedup, with outlier trials caused by transient system noise identified and excluded before computing summary statistics.
+
+The main contributions of this work are:
+\begin{itemize}[noitemsep]
+    \item Implementation and benchmarking of sequential, OpenMP, blocked, and blocked-OpenMP matrix multiplication algorithms under a common measurement harness.
+    \item Experimental evaluation of cache blocking through block-size sweeps informed by the target processor's cache hierarchy.
+    \item Performance analysis across varying matrix sizes and thread counts using runtime and speedup, with outlier trials (caused by transient OS-level interruptions) identified and removed prior to computing mean and standard deviation.
+\end{itemize}
+
+\section{Background}
+\label{sec:background}
+
+The standard triple-nested-loop algorithm for multiplying two $N \times N$ matrices $A$ and $B$ to produce $C = AB$ performs $N^3$ scalar multiply-accumulate operations. On modern hardware, the achievable throughput is rarely limited by arithmetic issue rate alone; it is instead governed by two additional factors:
+
+\textbf{Thread-level parallelism.} The $N^3$ independent multiply-accumulate operations can, in principle, be distributed across multiple CPU cores. OpenMP exposes this parallelism through compiler pragmas (e.g., \texttt{\#pragma omp parallel for}) that require no explicit thread management, at the cost of synchronization and scheduling overhead that can dominate at small problem sizes.
+
+\textbf{Memory hierarchy.} The naive loop order accesses matrix $B$ column-wise in the innermost loop, which is cache-unfriendly for row-major storage (as used by \texttt{std::vector<std::vector<int>>}). As $N$ grows beyond the point where a full row or column fits in cache, the working set of the inner loops exceeds the L1/L2 cache, and the algorithm becomes memory-bandwidth bound rather than compute bound. Cache blocking (tiling) restructures the loop nest so that computation proceeds over small $BS \times BS$ sub-blocks of $A$, $B$, and $C$ that are sized to remain resident in cache across the innermost loop, increasing data reuse before eviction.
+
+These two optimizations are largely orthogonal: parallelism distributes work across cores, while blocking improves the efficiency of work done on each core. Combining them is expected to be multiplicative in the best case, though in practice thread-synchronization overhead and the fixed block size can interact with problem size in non-trivial ways, as we observe in Section~\ref{sec:evaluation}.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+All four implementations are written in C++ and compiled with \texttt{g++} (OpenMP variants with \texttt{-fopenmp}). Each program reads a matrix dimension $N$ (and, where applicable, a thread count and/or block size) from standard input, generates two $N \times N$ integer matrices with a fixed random seed (\texttt{srand(42)}), and times only the multiplication step using \texttt{std::chrono::high\_resolution\_clock}, reporting elapsed time in milliseconds.
+
+A Python benchmark harness compiles each program once and then drives it repeatedly across a grid of matrix sizes ($N \in \{64, 128, 256, 512, 1024, 2048\}$) and, for the parallel/blocked variants, a grid of thread counts ($\{1,2,4,8,10,12\}$) or block sizes ($\{8,16,24,32,48,64,96,128\}$). Each $(N, \text{configuration})$ pair is run 30 times, with the parsed runtime, repeat count, and full sample vector logged to CSV.
+
+
+\section{Sequential Matrix Multiplication}
+\label{sec:sequential}
+
+The sequential baseline (Listing~\ref{lst:seq}) implements the standard triple-nested loop with no parallelism and no cache blocking, serving as the reference point for all speedup calculations.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{bop_speedup.png}
+\caption{Blocked+OpenMP speedup vs.\ thread count, by matrix size (block size fixed at 48).}
+\label{fig:bop_speedup}
+\end{figure}
+
+\begin{lstlisting}[caption={Sequential matrix multiplication kernel.}, label={lst:seq}]
+for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+        for (int k = 0; k < N; k++) {
+            C[i][j] += A[i][k] * B[k][j];
+        }
+    }
+}
+\end{lstlisting}
+
+Table~\ref{tab:seq} reports the mean and standard deviation of runtime at each matrix size, computed after IQR outlier removal. As expected for an $O(N^3)$ algorithm, runtime grows by roughly a factor of $8\times$ each time $N$ doubles at small sizes, though the growth factor increases somewhat at larger $N$ (e.g., $1024 \to 2048$ shows a factor of $\sim$15$\times$), consistent with the working set exceeding cache capacity and the algorithm becoming increasingly memory-bound. Figure~\ref{fig:seq_linear} plots mean runtime against $N$ on a linear scale, and Figure~\ref{fig:seq_loglog} shows the same data on log-log axes against an $O(N^3)$ reference curve, confirming the expected cubic growth rate.
+
+\begin{table}[h]
+\centering
+\caption{Sequential runtime statistics (ms) 30 repeats per $N$.}
+\label{tab:seq}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{N} & \textbf{Mean} & \textbf{Std} \\
+\midrule
+64   & 0.169     & 0.024  \\
+128  & 1.366     & 0.090  \\
+256  & 11.061    & 0.450  \\
+512  & 157.244   & 6.433 \\
+1024 & 1470.057  & 27.290 \\
+2048 & 22695.862 & 680.385\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{OpenMP Parallelization}
+\label{sec:openmp}
+
+The OpenMP implementation parallelizes the two outer loops with \texttt{\#pragma omp parallel for collapse(2)} (Listing~\ref{lst:omp}), distributing $(i,j)$ output-element computations across threads while each thread executes the full $k$-reduction sequentially.
+
+\begin{lstlisting}[caption={OpenMP-parallelized matrix multiplication kernel.}, label={lst:omp}]
+#pragma omp parallel for collapse(2)
+for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+        for (int k = 0; k < N; k++) {
+            C[i][j] += A[i][k] * B[k][j];
+        }
+    }
+}
+\end{lstlisting}
+
+Thread counts of 1, 2, 4, 8, 10, and 12 were benchmarked at every matrix size. Table~\ref{tab:omp_best} reports the best-performing thread count and its mean runtime at each $N$, after outlier removal.
+
+
+
+\begin{table}[h]
+\centering
+\caption{Best OpenMP configuration per matrix size (mean over 30 repeats, after outlier removal).}
+\label{tab:omp_best}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{N} & \textbf{Best thread count} & \textbf{Mean runtime (ms)} & \textbf{Std (ms)} \\
+\midrule
+64   & 1  & 0.255    & 0.027 \\
+128  & 4  & 1.524    & 0.138 \\
+256  & 10 & 5.393    & 0.240 \\
+512  & 10 & 39.426   & 1.027 \\
+1024 & 12 & 303.647  & 8.637 \\
+2048 & 12 & 5184.261 & 763.190 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Notably, the single-threaded configuration is optimal at $N=64$: at this size the sequential kernel already completes in under a millisecond, and OpenMP's thread-spawning and scheduling overhead exceeds any benefit from parallel execution. As $N$ grows, the optimal thread count increases, reaching the maximum tested value of 12 threads by $N=1024$. Figure~\ref{fig:omp_linear} shows mean runtime vs.\ thread count for each matrix size, and Figure~\ref{fig:omp_speedup} shows the corresponding speedup curves.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{bop_speedup.png}
+\caption{Blocked+OpenMP speedup vs.\ thread count, by matrix size (block size fixed at 48).}
+\label{fig:bop_speedup}
+\end{figure}
+
+\section{Cache Blocking}
+\label{sec:blocking}
+
+The blocked implementation (Listing~\ref{lst:blocked}) restructures the triple loop into six nested loops: three outer loops iterate over $BS \times BS$ tiles of $A$, $B$, and $C$, and three inner loops perform the multiply-accumulate within a tile.
+
+\begin{lstlisting}[caption={Cache-blocked matrix multiplication kernel.}, label={lst:blocked}]
+for (int ii = 0; ii < N; ii += BS) {
+  for (int jj = 0; jj < N; jj += BS) {
+    for (int kk = 0; kk < N; kk += BS) {
+      for (int i = ii; i < min(ii + BS, N); i++) {
+        for (int j = jj; j < min(jj + BS, N); j++) {
+          for (int k = kk; k < min(kk + BS, N); k++) {
+            C[i][j] += A[i][k] * B[k][j];
+          }
+        }
+      }
+    }
+  }
+}
+\end{lstlisting}
+
+Block sizes $BS \in \{8, 16, 24, 32, 48, 64, 96, 128\}$ were swept at every matrix size to identify the tile size that best matches the processor's cache capacity. Table~\ref{tab:blk_best} reports the best block size found at each $N$, by mean runtime after outlier removal; the block-size sensitivity itself is analyzed further in Section~\ref{sec:blocksize}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{bop_speedup.png}
+\caption{Blocked+OpenMP speedup vs.\ thread count, by matrix size (block size fixed at 48).}
+\label{fig:bop_speedup}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{Best cache-blocking configuration per matrix size (mean over 30 repeats, after outlier removal).}
+\label{tab:blk_best}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{N} & \textbf{Best block size} & \textbf{Mean runtime (ms)} & \textbf{Std (ms)} \\
+\midrule
+64   & 32  & 0.213    & 0.000 \\
+128  & 128 & 1.693    & 0.060 \\
+256  & 96  & 14.752   & 0.677 \\
+512  & 32  & 119.666  & 1.597 \\
+1024 & 48  & 946.606  & 13.204 \\
+2048 & 48  & 7734.930 & 113.013 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At small matrix sizes ($N \le 256$), mid-to-large block sizes perform best and are essentially indistinguishable from the unblocked case, since the entire matrix already fits within cache. Blocking begins to pay off only once $N \geq 512$, where the optimal block size settles to 32--48, small enough that three $BS \times BS$ tiles (from $A$, $B$, and $C$) fit comfortably within L1/L2 cache simultaneously. Figure~\ref{fig:blk_linear} shows mean runtime vs.\ block count for each matrix size, and Figure~\ref{fig:blk_speedup} shows the corresponding speedup curves; both are discussed further as the block-size analysis in Section~\ref{sec:blocksize}.
+
+
+\section{Blocked + OpenMP}
+\label{sec:blocked_openmp}
+
+The combined implementation applies \texttt{\#pragma omp parallel for collapse(2)} to the two outer block-index loops of the blocked kernel, with the block size fixed at $BS=48$ in the source code (rather than swept, as in the standalone blocked implementation) and thread count varied across the same $\{1,2,4,8,10,12\}$ grid used for plain OpenMP.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{bop_speedup.png}
+\caption{Blocked+OpenMP speedup vs.\ thread count, by matrix size (block size fixed at 48).}
+\label{fig:bop_speedup}
+\end{figure}
+
+\begin{lstlisting}[caption={Cache-blocked matrix multiplication kernel.}, label={lst:blocked}]
+#pragma omp parallel for collapse(2)
+for (int ii = 0; ii < N; ii += BS) {
+  for (int jj = 0; jj < N; jj += BS) {
+    for (int kk = 0; kk < N; kk += BS) {
+      for (int i = ii; i < min(ii + BS, N); i++) {
+        for (int j = jj; j < min(jj + BS, N); j++) {
+          for (int k = kk; k < min(kk + BS, N); k++) {
+            C[i][j] += A[i][k] * B[k][j];
+          }
+        }
+      }
+    }
+  }
+}
+\end{lstlisting}
+
+\begin{table}[h]
+\centering
+\caption{Best Blocked+OpenMP configuration per matrix size (mean over 30 repeats, after outlier removal; block size fixed at 48).}
+\label{tab:bop_best}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{N} & \textbf{Best thread count} & \textbf{Mean runtime (ms)} & \textbf{Std (ms)} \\
+\midrule
+64   & 1  & 0.718    & 0.103 \\
+128  & 10 & 2.606    & 0.173 \\
+256  & 10 & 9.736    & 0.505 \\
+512  & 10 & 53.745   & 1.961 \\
+1024 & 12 & 423.377  & 15.325 \\
+2048 & 12 & 3222.881 & 17.685 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Because $BS=48$ is fixed rather than tuned per-$N$, the combined implementation is slower than plain OpenMP at every size except $N=2048$ (see Section~\ref{sec:speedup}), where the benefit of cache-friendly access finally outweighs the fixed block-size mismatch at smaller sizes plus the added parallel-loop overhead of iterating over block indices rather than individual rows. Figure~\ref{fig:bop_linear} shows mean runtime vs.\ thread count for each matrix size, and Figure~\ref{fig:bop_speedup} shows the corresponding speedup curves.
+
+
+
+
+\section{Performance Evaluation}
+\label{sec:evaluation}
+
+\subsection{Runtime}
+\label{sec:runtime}
+
+Table~\ref{tab:runtime_summary} consolidates the best-configuration mean runtime of all four implementations at each matrix size (reproduced from Tables~\ref{tab:seq}--\ref{tab:bop_best}). Runtime grows super-linearly with $N$ for every implementation, consistent with the underlying $O(N^3)$ algorithm, though the growth rate and absolute runtime differ substantially once parallelism and blocking are introduced: the sequential and blocked-only implementations track each other closely at small $N$ (Figures~\ref{fig:seq_linear} and \ref{fig:blk_linear}), while the two OpenMP-enabled variants diverge from the sequential curve as soon as parallelism overhead is amortized, around $N=256$ (Figures~\ref{fig:omp_linear} and \ref{fig:bop_linear}).
+
+\begin{table}[h]
+\centering
+\caption{Best-configuration mean runtime (ms) by implementation and matrix size.}
+\label{tab:runtime_summary}
+\begin{tabular}{rrrrr}
+\toprule
+\textbf{N} & \textbf{Sequential} & \textbf{OpenMP} & \textbf{Blocked} & \textbf{Blocked+OpenMP} \\
+\midrule
+64   & 0.169     & 0.255    & 0.213    & 0.718    \\
+128  & 1.366     & 1.524    & 1.693    & 2.606    \\
+256  & 11.061    & 5.393    & 14.752   & 9.736    \\
+512  & 157.244   & 39.426   & 119.666  & 53.745   \\
+1024 & 1470.057  & 303.647  & 946.606  & 423.377  \\
+2048 & 22695.862 & 5184.261 & 7734.930 & 3222.881 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Outlier handling}
+\label{sec:outliers}
+
+Across all four datasets, a consistent fraction of trials produced runtimes two to three orders of magnitude larger than the rest of the samples at the same configuration -- for example, at $N=512$ in the sequential dataset, 26 of 30 runs completed in 147--177\,ms, while the remaining runs spiked to approximately 56{,}400--56{,}800\,ms. This pattern recurs across every matrix size and every implementation, and the spike magnitudes cluster tightly around 50{,}000--58{,}000\,ms regardless of $N$ or thread/block configuration, which is inconsistent with algorithmic variance (which should scale with $N$) and instead points to a transient, roughly constant-duration external interruption -- most plausibly OS scheduler preemption, background system activity, or (on a laptop) a power/thermal-state transition that stalls the process for several tens of seconds.
+
+Because a small number of such spikes inflate the standard deviation far more than the mean, naive mean $\pm$ standard-deviation reporting computed on the raw samples produces implausible results (e.g., a standard deviation larger than the mean itself, and error bars extending to negative runtimes). We therefore apply an interquartile-range (IQR) outlier filter to each set of 30 runs (removing samples outside $[Q_1 - 1.5\,\text{IQR},\ Q_3 + 1.5\,\text{IQR}]$) prior to computing the mean and standard deviation reported throughout the remainder of this paper. Table~\ref{tab:outliers} summarizes the fraction of runs flagged as outliers in each dataset. At $N=512$ for the sequential implementation, for example, the raw (uncleaned) mean and standard deviation are 3919.9\,ms and 14{,}316.6\,ms respectively, driven entirely by a handful of runs that spiked to roughly 56{,}400--56{,}800\,ms; after removing those outliers, the mean drops to 157.2\,ms with a standard deviation of only 6.4\,ms, in line with the bulk of the 30 samples.
+
+
+
+\subsection{Speedup}
+\label{sec:speedup}
+
+Table~\ref{tab:speedup} reports speedup relative to the sequential baseline, computed as $\text{mean}_{\text{seq}}(N) / \text{mean}_{\text{best}}(N)$ for the best configuration of each optimized implementation at matching $N$ (see also Figures~\ref{fig:omp_speedup}, \ref{fig:blk_speedup}, and \ref{fig:bop_speedup} for the full speedup curves across thread/block counts).
+
+\begin{table}[h]
+\centering
+\caption{Speedup vs. sequential baseline (best configuration per implementation).}
+\label{tab:speedup}
+\begin{tabular}{rrrr}
+\toprule
+\textbf{N} & \textbf{OpenMP} & \textbf{Blocked} & \textbf{Blocked+OpenMP} \\
+\midrule
+64   & 0.66 & 0.79 & 0.24 \\
+128  & 0.90 & 0.81 & 0.52 \\
+256  & 2.05 & 0.75 & 1.14 \\
+512  & 3.99 & 1.31 & 2.93 \\
+1024 & 4.84 & 1.55 & 3.47 \\
+2048 & 4.38 & 2.93 & 7.04 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three patterns are notable. First, both OpenMP-enabled implementations are \emph{slower} than sequential execution at $N=64$ and, for Blocked+OpenMP, also at $N=128$, confirming that thread-spawning and synchronization overhead dominates at small problem sizes. Second, plain OpenMP alone peaks around $4.8\times$ speedup at $N=1024$ and eases slightly to $4.4\times$ at $N=2048$, well below the 12 threads available, indicating that memory bandwidth rather than core count is the limiting factor at large $N$ for the un-blocked access pattern. Third, the combined Blocked+OpenMP implementation overtakes plain OpenMP only at the largest tested size ($N=2048$: $7.04\times$ vs.\ $4.38\times$), where the fixed $BS=48$ block size finally aligns well with the cache-to-problem-size ratio; at smaller $N$, the fixed block size is a poor match and the combined approach underperforms plain OpenMP.
+
+As shown in Figure~\ref{fig:omp_speedup}, OpenMP speedup as a function of thread count varies by matrix size: at $N=256$, speedup peaks around 8--10 threads; at $N=1024$ and $N=2048$, speedup continues to increase up to the maximum of 12 threads tested, suggesting that additional cores beyond 12 could yield further gains at large $N$.
+
+\subsection{Block Size Analysis}
+\label{sec:blocksize}
+
+Figures~\ref{fig:blk_linear} and \ref{fig:blk_speedup} (Section~\ref{sec:blocking}) show mean runtime and speedup against block count for the standalone Blocked implementation across matrix sizes. At $N=256$ and below, runtime is essentially flat across block sizes, since the whole matrix already fits within typical L2/L3 cache regardless of tiling. At $N=512$ and above, a clear optimum emerges around a block size of 32--48: runtime decreases as block size shrinks from 128 down to this range, then begins to increase again at the smallest block sizes tested (8--16), where the overhead of the additional loop nesting outweighs any further cache-locality benefit. This behavior is the signature of a block size well matched to the cache hierarchy: too large, and tiles do not fit in cache; too small, and loop overhead dominates.
+
+\section{Discussion}
+\label{sec:discussion}
+
+The most striking methodological finding of this study is not about matrix multiplication per se, but about benchmarking practice: every one of the four implementations, at every matrix size and every thread/block configuration, exhibited a consistent 7--11\% rate of extreme outlier runs whose durations cluster tightly around 50{,}000--58{,}000\,ms regardless of the underlying problem size or configuration. Because the magnitude of these spikes does not scale with $N$ or with thread/block count, they cannot be explained by the matrix multiplication algorithm itself; the far more plausible explanation is an external, roughly constant-duration interruption -- such as OS scheduler preemption, background system activity, or a power/thermal state transition -- that occasionally stalls the benchmarked process for tens of seconds regardless of what it is computing. This observation motivates our use of IQR-based outlier removal prior to computing mean and standard deviation throughout, and more broadly argues that any benchmarking methodology on a general-purpose, non-isolated system should explicitly screen for and report such outliers, rather than reporting raw mean/standard deviation over contaminated samples (Table~\ref{tab:outliers}).
+
+On the algorithmic side, the results confirm the expected qualitative behavior: parallelism alone (OpenMP) provides substantial speedup at large $N$ but is bottlenecked by memory bandwidth once thread count is no longer the limiting factor; cache blocking alone provides smaller but still meaningful speedup, concentrated at large $N$ where the naive access pattern's cache-unfriendliness is most costly; and the two optimizations combine multiplicatively only when the block size is well matched to the problem size, which is not guaranteed when the block size is fixed rather than tuned. This last point is the most actionable finding for practitioners: a hybrid parallel-plus-blocked implementation with a single hardcoded block size can \emph{underperform} a simpler parallel-only implementation across most of the size range tested, and only pulls ahead once the fixed block size happens to suit the problem size. An adaptive or auto-tuned block size, selected as a function of $N$ and the target cache hierarchy, would likely close this gap and extend the combined implementation's advantage to smaller matrix sizes as well.
+
+A further limitation is that the thread-count sweep was capped at 12 threads; the continued upward trend in OpenMP speedup at $N=1024$ and $N=2048$ (Figure~\ref{fig:omp_speedup}) suggests that additional cores could yield further gains at large problem sizes, and this remains an open question for hardware with a higher core count.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented a systematic performance evaluation of sequential, OpenMP-parallel, cache-blocked, and combined blocked-OpenMP dense matrix multiplication implementations across matrix sizes from $64$ to $2048$. A substantial and consistent rate of extreme-outlier benchmark runs, attributable to transient system-level interruption rather than algorithmic variance, motivated removing these outliers via an IQR rule prior to computing mean and standard deviation throughout the analysis. Under this robust treatment, OpenMP parallelization achieved up to $4.9\times$ speedup, cache blocking alone achieved up to $2.9\times$ speedup, and the combined implementation achieved the best overall speedup of $7.0\times$ at the largest matrix size tested, though it underperformed plain OpenMP at smaller sizes due to a fixed, untuned block size. Block-size sweeps revealed a clear cache-capacity-driven optimum for $N \geq 512$, while thread-count sweeps showed OpenMP speedup still increasing at the maximum thread count tested for large $N$. Future work should explore adaptive block-size selection, isolate the benchmarking environment (e.g., via CPU pinning or a dedicated benchmarking host) to eliminate the observed outlier-inducing interruptions, and extend the thread-count sweep to determine where OpenMP speedup ultimately saturates at large $N$.
+
+\section*{Data accessibility statement}
+The C++ source implementations, Python benchmarking harness, raw per-trial CSV results, and analysis/plotting scripts used to produce this paper are available alongside this manuscript.
+
+\end{document}
+
+
+
+
+
+

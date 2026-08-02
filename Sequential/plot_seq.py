@@ -38,26 +38,6 @@ def plot_linear(Ns, means, stds, outpath):
     plt.close()
 
 
-def plot_loglog(Ns, means, outpath):
-    plt.figure(figsize=(8, 6))
-    plt.loglog(Ns, means, "o-", color="#dc2626", linewidth=2, markersize=6,
-               label="Measured")
-
-    # Fit a reference O(N^3) curve, anchored to the last data point
-    ref = means[-1] * (Ns / Ns[-1]) ** 3
-    plt.loglog(Ns, ref, "--", color="#6b7280", linewidth=1.5,
-               label="O(N³) reference")
-
-    plt.xlabel("Matrix size N (log scale)")
-    plt.ylabel("Mean runtime (ms, log scale)")
-    plt.title("Runtime Growth (log-log) vs O(N³) Reference")
-    plt.legend()
-    plt.grid(True, which="both", alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(outpath, dpi=150)
-    print(f"Saved {outpath}")
-    plt.close()
-
 
 def main():
     parser = argparse.ArgumentParser(description="Plot benchmark CSV results")
